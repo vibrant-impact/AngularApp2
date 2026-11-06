@@ -7,6 +7,8 @@ import { CertificationItem, CertificationMilestone } from '../models/certificati
   providedIn: 'root'
 })
 export class TaskService {
+  private readonly storageKey: string = 'certRoadmapTasks';
+
   private readonly initialCertifications: Array<CertificationItem> = [
     {
       id: 'cert-1',
@@ -15,7 +17,7 @@ export class TaskService {
       credentialType: 'paid-exam',
       priority: 'critical',
       estimatedCost: 245,
-      estimatedMinutes: 3600, // 60 hours
+      estimatedMinutes: 3600,
       targetCompletionDate: '2026-11-27',
       isCompleted: false,
       createdAt: new Date(),
@@ -32,9 +34,9 @@ export class TaskService {
         {
           id: 'ms-1-2',
           certificationId: 'cert-1',
-          title: 'Purchase Black Friday Sale Exam Voucher',
+          title: 'Purchase Black Friday Voucher',
           description: 'Check Oracle University promotion store for holiday discount codes.',
-          targetDate: '2026-11-20',
+          targetDate: '2026-11-27',
           isCompleted: false,
           createdAt: new Date()
         }
@@ -57,16 +59,7 @@ export class TaskService {
           certificationId: 'cert-2',
           title: 'Serverless CI/CD Pipeline Lab',
           description: 'Practice SAM and CodePipeline automated deployments.',
-          targetDate: '2026-12-10',
-          isCompleted: false,
-          createdAt: new Date()
-        },
-        {
-          id: 'ms-2-2',
-          certificationId: 'cert-2',
-          title: 'Complete Udemy AWS Course',
-          description: 'Practice exams with explanations and practice.',
-          targetDate: '2027-01-15',
+          targetDate: '2026-12-05',
           isCompleted: false,
           createdAt: new Date()
         }
@@ -123,15 +116,16 @@ export class TaskService {
     }
   ];
 
-  // Subject holding all certifications
-  private readonly certificationsSubject = new BehaviorSubject<Array<CertificationItem>>(this.initialCertifications);
+  // Subject initialization loading from localStorage with browser guard
+  private readonly certificationsSubject = new BehaviorSubject<Array<CertificationItem>>(
+    this.getStoredCertifications()
+  );
   public readonly certifications$: Observable<Array<CertificationItem>> = this.certificationsSubject.asObservable();
 
-  // Subject holding the currently selected certification ID
   private readonly selectedCertificationIdSubject = new BehaviorSubject<string>('cert-1');
   public readonly selectedCertificationId$: Observable<string> = this.selectedCertificationIdSubject.asObservable();
 
-  // Combine both streams so selecting a pill immediately updates the active certification
+  // Combine both streams so switching pills updates the active view immediately
   public readonly activeCertification$: Observable<CertificationItem | undefined> = combineLatest([
     this.certifications$,
     this.selectedCertificationId$
@@ -141,7 +135,6 @@ export class TaskService {
     })
   );
 
-  // Stream calculating total active budget
   public readonly pendingBudgetTotal$: Observable<number> = this.certifications$.pipe(
     map((certs: Array<CertificationItem>) =>
       certs
@@ -151,15 +144,36 @@ export class TaskService {
   );
 
   /**
-   * Sets the active certification.
+   * Retrieves saved tasks from browser localStorage.
    */
+  private getStoredCertifications(): Array<CertificationItem> {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const savedData = localStorage.getItem(this.storageKey);
+      if (savedData) {
+        try {
+          return JSON.parse(savedData);
+        } catch {
+          return this.initialCertifications;
+        }
+      }
+    }
+    return this.initialCertifications;
+  }
+
+  /**
+   * Central method that writes to localStorage and notifies subscribers.
+   */
+  private emitAndSave(updatedCertifications: Array<CertificationItem>): void {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      localStorage.setItem(this.storageKey, JSON.stringify(updatedCertifications));
+    }
+    this.certificationsSubject.next(updatedCertifications);
+  }
+
   public selectCertification(certificationId: string): void {
     this.selectedCertificationIdSubject.next(certificationId);
   }
 
-  /**
-   * Adds a new certification.
-   */
   public addCertification(newCertData: Omit<CertificationItem, 'id' | 'isCompleted' | 'milestones' | 'createdAt'>): void {
     const currentList = this.certificationsSubject.getValue();
     const createdCert: CertificationItem = {
@@ -169,13 +183,12 @@ export class TaskService {
       milestones: [],
       createdAt: new Date()
     };
-    this.certificationsSubject.next([...currentList, createdCert]);
+    
+    // Uses emitAndSave so it immediately writes to localStorage
+    this.emitAndSave([...currentList, createdCert]);
     this.selectedCertificationIdSubject.next(createdCert.id);
   }
 
-  /**
-   * Toggles certification complete status.
-   */
   public toggleCertificationCompletion(certificationId: string): void {
     const updated = this.certificationsSubject.getValue().map((cert: CertificationItem) => {
       if (cert.id === certificationId) {
@@ -183,66 +196,38 @@ export class TaskService {
       }
       return cert;
     });
-    this.certificationsSubject.next(updated);
+    this.emitAndSave(updated);
   }
 
-  /**
-   * Deletes a certification.
-   */
   public deleteCertification(certificationId: string): void {
     const filtered = this.certificationsSubject.getValue().filter(
       (cert: CertificationItem) => cert.id !== certificationId
     );
-    this.certificationsSubject.next(filtered);
+    this.emitAndSave(filtered);
     if (this.selectedCertificationIdSubject.getValue() === certificationId && filtered.length > 0) {
       this.selectedCertificationIdSubject.next(filtered[0].id);
     }
   }
 
-  /**
-   * Adds a milestone to the specified certification.
-   */
   public addMilestone(certificationId: string, title: string, description: string, targetDate: string): void {
-  const updated = this.certificationsSubject.getValue().map((cert: CertificationItem) => {
-    if (cert.id === certificationId) {
-      const newMilestone: CertificationMilestone = {
-        id: `ms-${Date.now()}`,
-        certificationId: cert.id,
-        title,
-        description,
-        targetDate: targetDate || new Date().toISOString().split('T')[0],
-        isCompleted: false,
-        createdAt: new Date()
-      };
-      return { ...cert, milestones: [newMilestone, ...cert.milestones] };
-    }
-    return cert;
-  });
-  this.certificationsSubject.next(updated);
-}
-
-/**
- * Updates the target date of an existing milestone dynamically.
- */
-  public updateMilestoneTargetDate(certificationId: string, milestoneId: string, newDate: string): void {
     const updated = this.certificationsSubject.getValue().map((cert: CertificationItem) => {
       if (cert.id === certificationId) {
-        const updatedMilestones = cert.milestones.map((ms: CertificationMilestone) => {
-          if (ms.id === milestoneId) {
-            return { ...ms, targetDate: newDate };
-          }
-          return ms;
-        });
-        return { ...cert, milestones: updatedMilestones };
+        const newMilestone: CertificationMilestone = {
+          id: `ms-${Date.now()}`,
+          certificationId: cert.id,
+          title,
+          description,
+          targetDate: targetDate || new Date().toISOString().split('T')[0],
+          isCompleted: false,
+          createdAt: new Date()
+        };
+        return { ...cert, milestones: [newMilestone, ...cert.milestones] };
       }
       return cert;
     });
-    this.certificationsSubject.next(updated);
+    this.emitAndSave(updated);
   }
 
-  /**
-   * Toggles milestone completion.
-   */
   public toggleMilestoneCompletion(certificationId: string, milestoneId: string): void {
     const updated = this.certificationsSubject.getValue().map((cert: CertificationItem) => {
       if (cert.id === certificationId) {
@@ -256,12 +241,25 @@ export class TaskService {
       }
       return cert;
     });
-    this.certificationsSubject.next(updated);
+    this.emitAndSave(updated);
   }
 
-  /**
-   * Deletes a milestone.
-   */
+  public updateMilestoneTargetDate(certificationId: string, milestoneId: string, newDate: string): void {
+    const updated = this.certificationsSubject.getValue().map((cert: CertificationItem) => {
+      if (cert.id === certificationId) {
+        const updatedMilestones = cert.milestones.map((ms: CertificationMilestone) => {
+          if (ms.id === milestoneId) {
+            return { ...ms, targetDate: newDate };
+          }
+          return ms;
+        });
+        return { ...cert, milestones: updatedMilestones };
+      }
+      return cert;
+    });
+    this.emitAndSave(updated);
+  }
+
   public deleteMilestone(certificationId: string, milestoneId: string): void {
     const updated = this.certificationsSubject.getValue().map((cert: CertificationItem) => {
       if (cert.id === certificationId) {
@@ -272,6 +270,6 @@ export class TaskService {
       }
       return cert;
     });
-    this.certificationsSubject.next(updated);
+    this.emitAndSave(updated);
   }
 }
